@@ -5,4 +5,4 @@
 
 #define __section(NAME)	__attribute__((section(NAME), used))
 
-char __license[] __section("license") = "MIT";
+char __license[] __section("license") = "GPL";

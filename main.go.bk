@@ -1,0 +1,291 @@
+package main
+
+import "C"
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"time"
+	"unsafe"
+
+	"github.com/cilium/ebpf"
+//	"github.com/cilium/cilium/pkg/mac"
+
+	"github.com/jsimonetti/rtnetlink"
+
+	"github.com/florianl/go-tc"
+	helper "github.com/florianl/go-tc/core"
+
+	"golang.org/x/sys/unix"
+)
+
+func uint32Ptr(v uint32) *uint32 {
+	return &v
+}
+
+func stringPtr(v string) *string {
+	return &v
+}
+
+//ifindex,mac address mapping for the interfaces
+type entry struct {
+	ifIdx uint32
+	mac   net.HardwareAddr //needs to be unsigned char[8] or byte?? XXX
+
+}
+
+func makeEntry(ifIdx uint32, mac net.HardwareAddr) *entry {
+	var en entry
+	en.ifIdx = ifIdx
+	en.mac = mac
+	return &en
+}
+
+func getAllMACs() ([]entry, error) {
+    ifas, err := net.Interfaces()
+    if err != nil {
+        return nil, err
+    }
+    entries := []entry{}
+    for _, ifa := range ifas {
+        a := ifa.HardwareAddr.String()
+        if a != "" {
+		fmt.Printf("ifIndex: %v macAddr: %v size_mac: %d\n",ifa.Index,ifa.HardwareAddr, int(unsafe.Sizeof(ifa.HardwareAddr)))
+	    //e := entry{ifIdx:uint32(ifa.Index),mac:ifa.HardwareAddr }
+	    e := makeEntry(uint32(ifa.Index),ifa.HardwareAddr)
+	    entries=append(entries,*e)
+        }
+    }
+    return entries, nil
+}
+
+//This will overwrite previous entry if any
+func addMap(m *ebpf.Map, entries []entry, rand int)(error){
+	fmt.Printf("Got %v Entries\n",len(entries))
+	for _, ifa := range entries {
+		err := m.Put(ifa.ifIdx+ uint32(rand), []byte(ifa.mac));
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return err
+		}
+	}
+	return nil
+}
+
+//This will overwrite previous entry if any
+func delMap(m *ebpf.Map, entries []entry, rand int)(error){
+	fmt.Printf("Got %v Entries\n",len(entries))
+	for _, ifa := range entries {
+		err := m.Delete(ifa.ifIdx+ uint32(rand));
+		if err != nil {
+			fmt.Printf("[delMap] Error: %v\n", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func createArray( maxEntries int, keySize int, valueSize int) (*ebpf.Map,error) {
+	fmt.Printf("KeySize: %d ValueSize: %d MaxEntries: %d\n", keySize, valueSize, maxEntries)
+	m, err := ebpf.NewMap(&ebpf.MapSpec{
+		Type:       ebpf.Hash,
+		KeySize:    uint32(keySize),
+		ValueSize:  uint32(valueSize),
+		MaxEntries: uint32(maxEntries),
+	})
+	if err != nil {
+		return nil,err
+	}
+	return m,nil
+}
+
+
+func main() {
+	//XXX close the map
+	path := "/sys/fs/bpf/tc/globals/iface_map"
+	macArr,err := getAllMACs()
+	if err != nil || len(macArr) == 0 {
+		return
+	}
+
+	var m *ebpf.Map
+	var en entry
+	m, err = createArray(2*len(macArr),
+		int(unsafe.Sizeof(en.ifIdx)),
+		//C.ETH_ALEN)
+		//int(unsafe.Sizeof(en.mac)))
+		6)
+	if err != nil {
+		fmt.Printf("Error! create map: %s\n", err)
+		return
+	}
+
+	if err := m.Pin(path); err != nil {
+		m.Close()
+		fmt.Printf("Error! pin map: %s\n", err)
+		return
+	}
+
+	err = addMap(m, macArr,0)
+	if err != nil {
+		fmt.Printf("Error! populating map: %s\n", err)
+		return
+	}
+	err = delMap(m, macArr,3)
+	if err != nil {
+		fmt.Printf("Error! populating map: %s\n", err)
+		return
+	}
+	return
+}
+
+// setupDummyInterface installs a temporary dummy interface
+func setupDummyInterface(iface string) (*rtnetlink.Conn, error) {
+	con, err := rtnetlink.Dial(nil)
+	if err != nil {
+		return &rtnetlink.Conn{}, err
+	}
+	if err := con.Link.New(&rtnetlink.LinkMessage{
+		Family: unix.AF_UNSPEC,
+		Type:   unix.ARPHRD_NETROM,
+		Index:  0,
+		Flags:  unix.IFF_UP,
+		Change: unix.IFF_UP,
+		Attributes: &rtnetlink.LinkAttributes{
+			Name: iface,
+			Info: &rtnetlink.LinkInfo{Kind: "dummy"},
+		},
+	}); err != nil {
+		return con, err
+	}
+	return con, err
+}
+
+func main1() {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	defer cancel()
+
+	// Load eBPF from an elf file
+	coll, err := ebpf.LoadCollectionSpec("ebpf/drop")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not load collection from file: %v\n", err)
+		return
+	}
+
+	// Load the eBPF program ingress_drop
+	ingressDrop, err := ebpf.NewProgramWithOptions(coll.Programs["ingress_drop"],
+		ebpf.ProgramOptions{
+			LogLevel: 1,
+			LogSize:  65536,
+		})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not load program: %v\n", err)
+		return
+	}
+	defer ingressDrop.Close()
+
+	// Print verifier feedback
+	fmt.Printf("%s", ingressDrop.VerifierLog)
+
+	info, _ := ingressDrop.Info()
+
+	// Setup tc socket for communication with the kernel
+	tcnl, err := tc.Open(&tc.Config{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not open rtnetlink socket: %v\n", err)
+		return
+	}
+	defer func() {
+		if err := tcnl.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "could not close rtnetlink socket: %v\n", err)
+		}
+	}()
+
+	// Setup dummy interface for testing
+	//var rtnl *rtnetlink.Conn
+	tcIface := "docker0"
+	
+	/*tcIface := "testDev"
+	if rtnl, err = setupDummyInterface(tcIface); err != nil {
+		fmt.Fprintf(os.Stderr, "could not setup dummy interface: %v\n", err)
+		return
+	}
+	defer rtnl.Close()*/
+	devID, err := net.InterfaceByName(tcIface)
+
+	//Print mac address
+	fmt.Printf("devID: %v\n",devID.HardwareAddr.String())
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not get interface ID: %v\n", err)
+		return
+	}
+	/*defer func(devID uint32, rtnl *rtnetlink.Conn) {
+		if err := rtnl.Link.Delete(devID); err != nil {
+			fmt.Fprintf(os.Stderr, "could not delete interface %s: %v\n", tcIface, err)
+		}
+	}(uint32(devID.Index), rtnl)
+*/
+	qdisc := tc.Object{
+		tc.Msg{
+			Family:  unix.AF_UNSPEC,
+			Ifindex: uint32(devID.Index),
+			Handle:  helper.BuildHandle(0xFFFF, 0x0000),
+			Parent:  tc.HandleIngress,
+		},
+		tc.Attribute{
+			Kind: "clsact",
+		},
+	}
+
+	// Install Qdisc on testing interface
+	if err := tcnl.Qdisc().Add(&qdisc); err != nil {
+		fmt.Fprintf(os.Stderr, "could not assign clsact to %s: %v\n", tcIface, err)
+		return
+	}
+	// when deleting the qdisc, the applied filter will also be gone
+	defer tcnl.Qdisc().Delete(&qdisc)
+
+	filter := tc.Object{
+		tc.Msg{
+			Family:  unix.AF_UNSPEC,
+			Ifindex: uint32(devID.Index),
+			Handle:  0,
+			Parent:  0xFFFFFFF2,
+			Info:    0x10300,
+		},
+		tc.Attribute{
+			Kind: "bpf",
+			BPF: &tc.Bpf{
+				FD:    uint32Ptr(uint32(ingressDrop.FD())),
+				Name:  stringPtr(info.Name),
+				Flags: uint32Ptr(0x1),
+			},
+		},
+	}
+	if err := tcnl.Filter().Add(&filter); err != nil {
+		fmt.Fprintf(os.Stderr, "could not assign eBPF: %v\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Done setup of eBPF:\n")
+	<-ctx.Done()
+
+	if err := tcnl.Filter().Delete(&tc.Object{
+			tc.Msg{
+				Family:  unix.AF_UNSPEC,
+				Ifindex: uint32(devID.Index),
+				Handle:  1,
+				Parent:  0xFFFFFFF2,
+				Info:    0x10000,
+			},
+			tc.Attribute{
+				Kind: "bpf",
+			},
+		}); err != nil {
+		fmt.Fprintf(os.Stderr, "could not delete eBPF filter: %v\n", err)
+		return
+	}
+
+}

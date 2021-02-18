@@ -8,7 +8,7 @@ import (
 
 )
 
-const MAXLEN = 20000
+const MAXLEN = 2000
 
 //Code for monitoring network changes
 /*

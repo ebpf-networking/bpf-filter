@@ -102,7 +102,7 @@ func createArray( maxEntries int, keySize int, valueSize int) (*ebpf.Map,error) 
 }
 
 
-func main() {
+func main1() {
 	//XXX close the map
 	path := "/sys/fs/bpf/tc/globals/iface_map"
 	macArr,err := getAllMACs()
@@ -163,12 +163,12 @@ func setupDummyInterface(iface string) (*rtnetlink.Conn, error) {
 	return con, err
 }
 
-func main1() {
+func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 	defer cancel()
 
 	// Load eBPF from an elf file
-	coll, err := ebpf.LoadCollectionSpec("ebpf/drop")
+	coll, err := ebpf.LoadCollectionSpec("ebpf/drop-old")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "could not load collection from file: %v\n", err)
 		return
@@ -204,15 +204,15 @@ func main1() {
 	}()
 
 	// Setup dummy interface for testing
-	//var rtnl *rtnetlink.Conn
-	tcIface := "docker0"
+	var rtnl *rtnetlink.Conn
+	//tcIface := "docker0"
 	
-	/*tcIface := "testDev"
+	tcIface := "testDev"
 	if rtnl, err = setupDummyInterface(tcIface); err != nil {
 		fmt.Fprintf(os.Stderr, "could not setup dummy interface: %v\n", err)
 		return
 	}
-	defer rtnl.Close()*/
+	defer rtnl.Close()
 	devID, err := net.InterfaceByName(tcIface)
 
 	//Print mac address
@@ -222,12 +222,12 @@ func main1() {
 		fmt.Fprintf(os.Stderr, "could not get interface ID: %v\n", err)
 		return
 	}
-	/*defer func(devID uint32, rtnl *rtnetlink.Conn) {
+	defer func(devID uint32, rtnl *rtnetlink.Conn) {
 		if err := rtnl.Link.Delete(devID); err != nil {
 			fmt.Fprintf(os.Stderr, "could not delete interface %s: %v\n", tcIface, err)
 		}
 	}(uint32(devID.Index), rtnl)
-*/
+
 	qdisc := tc.Object{
 		tc.Msg{
 			Family:  unix.AF_UNSPEC,

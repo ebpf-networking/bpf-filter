@@ -106,7 +106,7 @@ static __inline int match_mac( struct __sk_buff *skb, uint32_t dir) {
 			src_mac[0],src_mac[1],src_mac[2]);
 		bpf_trace_printk(buf1, sizeof(buf1), 
 			src_mac[3],src_mac[4],src_mac[5]);*/
-		/*bpf_trace_printk(buf, sizeof(buf1), 
+	       		/*bpf_trace_printk(buf, sizeof(buf1), 
 			pkt_mac[0],pkt_mac[1],pkt_mac[2]);
 		bpf_trace_printk(buf, sizeof(buf1), 
 			pkt_mac[3],pkt_mac[4],pkt_mac[5]);*/

@@ -20,8 +20,12 @@ tc: ${BPFBIN}
 	llc -march=bpf -mcpu=probe -filetype=obj ${BPFBIN}/tc-example.bc -o ${BPFBIN}/tc-example.o
 
 drop-install: drop
+	tc qdisc add dev eth0 clsact
 	tc filter add dev eth0 ingress bpf da obj ${BPFBIN}/drop.o sec classifier_ingress_drop
 	tc filter add dev eth0 egress bpf da obj ${BPFBIN}/drop.o sec classifier_egress_drop
+
+drop-uninstall:
+	tc qdisc del dev eth0 clsact
 
 tc-install: tc
 	tc filter add dev eth0 ingress bpf da obj ${BPFBIN}/tc-example.o sec ingress
@@ -34,8 +38,11 @@ show:
 ${BINDIR}:
 	mkdir -p ${BINDIR}
 
-#{BPFBIN}:
+${BPFBIN}:
 	mkdir -p ${BPFBIN}
 
 clean:
-	rm -rf ${BINDIR}
+	rm -r ${BINDIR}
+
+clean-maps:
+	rm -r /sys/fs/bpf/tc/globals/*

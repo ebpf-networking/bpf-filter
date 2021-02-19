@@ -5,7 +5,7 @@
 #include <linux/pkt_cls.h>
 #include <iproute2/bpf_elf.h>
 #include <linux/ip.h>
-#include "../../iproute2/include/bpf_api.h"
+#include <iproute2/bpf_api.h>
 
 #ifndef __section
 # define __section(NAME)                  \

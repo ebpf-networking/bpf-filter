@@ -2,7 +2,7 @@
 
 iface=${1:-veth1}
 iface_idx=${2}
-prog=${2:-./bin/drop.o}
+prog=${3:-./bin/drop.o}
 user="main"
 
 #run user prog for programming maps

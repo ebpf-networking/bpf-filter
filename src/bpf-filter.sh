@@ -1,6 +1,7 @@
 #!/bin/bash
 
 iface=${1:-veth1}
+iface_idx=${2}
 prog=${2:-./bin/drop.o}
 user="main"
 

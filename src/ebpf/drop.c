@@ -1,11 +1,21 @@
-#include "common.h"
-
+#include <linux/if_packet.h>
+#include <linux/ipv6.h>
+#include <linux/icmpv6.h>
 #include <linux/if_ether.h>
 #include <linux/swab.h>
 #include <linux/pkt_cls.h>
 #include <iproute2/bpf_elf.h>
 #include <linux/ip.h>
-#include <iproute2/bpf_api.h>
+#include <linux/bpf.h>
+#include <linux/in.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+#include "common.h"
+#include "parsing_helpers.h"
+
+
+
 
 #ifndef __section
 # define __section(NAME)                  \
@@ -27,7 +37,6 @@
 	(*NAME)(__VA_ARGS__) = (void *)BPF_FUNC_##NAME
 #endif
 
-#define bpf_htonl __builtin_bswap32
 #define bpf_memcpy __builtin_memcpy
 
 #define EGRESS_MODE 0
@@ -67,8 +76,8 @@ struct bpf_elf_map ingress_iface_stat_map  __section("maps") = {
 
 
 /* helper functions called from eBPF programs */
-static int (*bpf_trace_printk)(const char *fmt, int fmt_size, ...) =
-	        (void *) BPF_FUNC_trace_printk;
+//static int (*bpf_trace_printk)(const char *fmt, int fmt_size, ...) =
+//	        (void *) BPF_FUNC_trace_printk;
 
 static __inline int match_mac( struct __sk_buff *skb, uint32_t mode) {
 
@@ -89,9 +98,9 @@ static __inline int match_mac( struct __sk_buff *skb, uint32_t mode) {
 		return TC_ACT_SHOT;
 
 	if(mode == EGRESS_MODE){
-	 	inf = map_lookup_elem(&egress_iface_stat_map, &(idx));
+	 	inf = bpf_map_lookup_elem(&egress_iface_stat_map, &(idx));
 	} else{
-	  	inf = map_lookup_elem(&ingress_iface_stat_map, &(idx));
+	  	inf = bpf_map_lookup_elem(&ingress_iface_stat_map, &(idx));
 	}
 	
 	if (!inf){
@@ -99,7 +108,7 @@ static __inline int match_mac( struct __sk_buff *skb, uint32_t mode) {
 		return TC_ACT_OK;
 	}
 
-	bytes = map_lookup_elem(&iface_map, &(idx));
+	bytes = bpf_map_lookup_elem(&iface_map, &(idx));
 	if (bytes) {
 		__u8 iface_mac[ETH_ALEN];
 		__u8 pkt_mac[ETH_ALEN];

@@ -5,6 +5,9 @@ import (
 	"net"
 	"unsafe"
 	"github.com/cilium/ebpf"
+	"flag"
+	"os"
+	"errors"
 
 )
 
@@ -102,7 +105,8 @@ type statEntry struct {
 }
 
 func initializeStatsMap(m *ebpf.Map, entries []uint32) (error) {
-     for _, entry := range entries {
+	fmt.Printf("initStatsMap : Info: %v keysize: %v valueSize: %v",m.String(),m.KeySize(), m.ValueSize())
+	for _, entry := range entries {
      	        cntPkt := cntPkt{drop:0,pass:0} 
 		err := m.Put(entry, (cntPkt));
 		if err != nil {
@@ -136,6 +140,16 @@ func getAllMACs() ([]entry, error) {
         }
     }
     return entries, nil
+}
+
+func getInterface(idx int) (*net.Interface,error){
+	ifa,err := net.InterfaceByIndex(idx)
+	if err != nil{
+		fmt.Printf("Error: %v",err.Error())
+		return nil,err
+	}
+	return ifa,nil
+
 }
 
 //Returns indices of interfaces
@@ -215,6 +229,27 @@ func closeMap(m *ebpf.Map) error {
 	return m.Close()
 }
 
+func getMap(path string)(*ebpf.Map,error){
+	return ebpf.LoadPinnedMap(path) 
+}
+
+func pinOrGetMap(path string, m *ebpf.Map)(*ebpf.Map,error){
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		err = pinMap(m, path)
+		if err != nil {
+			fmt.Printf("Error! PinOrGetMap map: %s\n", err)
+			return m,err
+		}
+		return m,nil
+	} else{
+		temp, err := getMap(path)
+		if err != nil {
+			fmt.Printf("Error! PinOrGetMap map: %s\n", err)
+			return m,err
+		}
+		return temp,nil
+	}
+}
 
 
 //We are not unpinning the map XXX
@@ -222,6 +257,15 @@ func closeMap(m *ebpf.Map) error {
 // Userspace should keep updating interfaces when they come and go down? So dont freeze()?? XXX
 func main() {
 
+	var mode string
+	var idx  int
+
+	flag.StringVar(&mode, "mode","init","Mode can be init or add")
+	flag.IntVar(&idx,"idx",0,"iface index")
+	flag.Parse()
+	fmt.Printf("Mode: %v idx: %v",mode,idx)
+
+	
      	//ifaceMacMapPath := os.args[1]
      	ifaceMacMapPath := "/sys/fs/bpf/tc/globals/iface_map"
 	//egressCountMapPath := os.args[2]
@@ -230,63 +274,88 @@ func main() {
 	ingressCountMapPath := "/sys/fs/bpf/tc/globals/ingress_iface_stat_map"
 	
 	//path := "/sys/fs/bpf/tc/globals/iface_map"
-	macArr,err := getAllMACs()
-	if err != nil || len(macArr) == 0 {
-		return
-	}
-
+	
+	var mac_map *ebpf.Map
 	var m *ebpf.Map
+	var ingress_stats_map *ebpf.Map
+	var egress_stats_map *ebpf.Map
+	
 	var en entry
 	var ct cntPkt
-	m, err = createArray(MAXLEN,
+
+	mac_map, err := createArray(MAXLEN,
 		//len(macArr),
 		int(unsafe.Sizeof(en.ifIdx)),
 		//int(unsafe.Sizeof(en.mac)))
 		6)
-	err = pinMap(m, ifaceMacMapPath)
+	mac_map,err = pinOrGetMap(ifaceMacMapPath,mac_map)
+	if err != nil {
+		fmt.Printf("Error! create map: %s\n", err)
+		return
+	}
+	
+	egress_stats_map,err = createArray(MAXLEN,int(unsafe.Sizeof(en.ifIdx)),int(unsafe.Sizeof(ct)))
+	egress_stats_map,err = pinOrGetMap(egressCountMapPath,egress_stats_map)
 	if err != nil {
 		fmt.Printf("Error! create map: %s\n", err)
 		return
 	}
 
-	err = addEntryMap(m, macArr, 0)
-	if err != nil {
-		fmt.Printf("Error! populating map: %s\n", err)
-		return
-	}
-
-	ifaceIndices,err := getAllIfaceIndices();
-
-	//Pin map and initialize egress count map
-	m,err = createArray(MAXLEN,int(unsafe.Sizeof(en.ifIdx)),int(unsafe.Sizeof(ct)))
-	if err != nil {
-		fmt.Printf("Error! create map: %s\n", err)
-		return
-	}
-	err = pinMap(m,egressCountMapPath)
-	initializeStatsMap(m,ifaceIndices)
-
-	if err != nil {
-		fmt.Printf("Error! populating map: %s\n", err)
-		return
-	}
-
-	//Pin map and initialize ingress count map
-	m,err = createArray(MAXLEN,int(unsafe.Sizeof(en.ifIdx)),int(unsafe.Sizeof(ct)))
+	ingress_stats_map,err = createArray(MAXLEN,int(unsafe.Sizeof(en.ifIdx)),int(unsafe.Sizeof(ct)))
+	ingress_stats_map,err = pinOrGetMap(ingressCountMapPath,ingress_stats_map)
 	if err != nil {
 		fmt.Printf("Error! create map: %s\n", err)
 		return
 	}
 
-	err = pinMap(m,ingressCountMapPath)
+	if( mode == "init"){
+		macArr,err := getAllMACs()
+		if err != nil || len(macArr) == 0 {
+			return
+		}
+		err = addEntryMap(mac_map, macArr, 0)
+		if err != nil {
+			fmt.Printf("Error! populating map: %s\n", err)
+			return
+		}
+		ifaceIndices,err := getAllIfaceIndices();
+		initializeStatsMap(egress_stats_map,ifaceIndices)
+		initializeStatsMap(ingress_stats_map,ifaceIndices)
+		
+	} else{
+		ifa,err := getInterface(idx)
+		if err != nil {
+			fmt.Printf("Could not get interface %v\n",err.Error())
+			//exit(0)
+		}
+		entries := []entry{}
+		e := makeEntry(uint32(ifa.Index),ifa.HardwareAddr)
+		entries=append(entries,*e)
+		err = addEntryMap(mac_map, entries, 0)
+		if err != nil {
+			fmt.Printf("Error! populating map: %s\n", err)
+			return
+		}
+		//Initialize stats maps for idx
+		cntPkt := cntPkt{drop:0,pass:0}
+		err = ingress_stats_map.Put(uint32(ifa.Index),(cntPkt))
+		if err != nil {
+                        fmt.Printf("Error: %v\n", err)
+                        return
+                }
+		err = egress_stats_map.Put(uint32(ifa.Index), (cntPkt));
+		if err != nil {
+                        fmt.Printf("Error: %v\n", err)
+                        return
+                }
 
-	initializeStatsMap(m,ifaceIndices)
+	}	
 
-	if err != nil {
-		fmt.Printf("Error! populating map: %s\n", err)
-		return
-	}
+	
 
+	
+
+	
 	/*arr := []interface{}{uint32(2),uint32(3),uint32(4)}
 	err = delEntryMap(m, arr)
 	if err != nil {

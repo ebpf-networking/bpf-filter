@@ -12,7 +12,7 @@ ${EXEC}: ${BINDIR} drop
 	go build -o ${BINDIR}/${EXEC} ${EXEC}.go
 
 drop: ${BPFBIN}
-	clang -O2 -g -Wall -Werror -emit-llvm -c ${BPFDIR}/drop.c -o ${BPFBIN}/drop.bc
+	clang -O2 -g -Wall -emit-llvm -c ${BPFDIR}/drop.c -o ${BPFBIN}/drop.bc
 	llc -march=bpf -mcpu=probe -filetype=obj ${BPFBIN}/drop.bc -o ${BPFBIN}/drop.o
 
 tc: ${BPFBIN}

@@ -1,5 +1,5 @@
 BINDIR=bin
-EXEC=main
+EXEC=bpf-user
 
 BPFDIR=ebpf
 BPFBIN=${BINDIR}/bpf
@@ -9,7 +9,7 @@ BPFEXEC=drop
 .default: ${EXEC}
 
 ${EXEC}: ${BINDIR} drop
-	go build -o ${BINDIR}/${EXEC} ${EXEC}.go
+	go build -o ${BINDIR}/${EXEC} main.go
 
 drop: ${BPFBIN}
 	clang -O2 -g -Wall -emit-llvm -c ${BPFDIR}/drop.c -o ${BPFBIN}/drop.bc

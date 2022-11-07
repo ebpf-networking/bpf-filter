@@ -43,9 +43,7 @@ Running
   $ make drop-install
 ```
 
-# Old
---------
-Simple project to demonstrate the loading of eBPF programs via [florianl/go-tc](https://github.com/florianl/go-tc).
+# This repo is based on [florianl/go-tc](https://github.com/florianl/go-tc)
 
 Overview
 --------

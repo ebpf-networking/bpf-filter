@@ -1,5 +1,5 @@
 BINDIR=bin
-EXEC=bpf-user
+EXEC=bpf-filter-user
 
 BPFDIR=ebpf
 BPFBIN=${BINDIR}/bpf

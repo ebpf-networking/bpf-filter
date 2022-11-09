@@ -1,18 +1,18 @@
 #!/bin/bash
 
-set -x
-
-iface=${VETH_NAME:-veth1}
-veth_id=${VETH_ID}
-vpeer_mac=${VPEER_MAC}
+iface=${VPEER_NAME}
+iface_id=${VPEER_ID}
+namespace=${NAMESPACE}
+mac_arg="INVALID"
 
 BPF_PROG=${3:-./bin/bpf/drop.o}
 
 BPF_USER="./bin/bpf-filter-user"
 
 #run user prog for programming maps
-CMD=${BPF_USER}" --mode add --idx "${veth_id}" --mac "${vpeer_mac}
-${CMD}
+CMD=${BPF_USER}" --mode add --idx "${iface_id}" --mac "${mac_arg}
+
+ip netns exec ${namespace} ${CMD}
 if [ $? -eq 1 ]
 then
     echo ${CMD}" failed error code "$?
@@ -20,8 +20,6 @@ then
 fi
 
 echo "Attaching bpf-filter to tc hookpoint"
-tc qdisc add dev ${iface} clsact
-tc filter add dev ${iface} ingress bpf da obj ${BPF_PROG} sec classifier_ingress_drop
-tc filter add dev ${iface} egress bpf da obj ${BPF_PROG} sec classifier_egress_drop
-
-set +x
+ip netns exec ${namespace} tc qdisc add dev ${iface} clsact
+ip netns exec ${namespace} tc filter add dev ${iface} ingress bpf da obj ${BPF_PROG} sec classifier_ingress_drop
+ip netns exec ${namespace} tc filter add dev ${iface} egress bpf da obj ${BPF_PROG} sec classifier_egress_drop

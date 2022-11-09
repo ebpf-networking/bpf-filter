@@ -46,6 +46,7 @@ func makeEntry(ifIdx uint32, mac net.HardwareAddr) *entry {
 	var en entry
 	en.ifIdx = ifIdx
 	en.mac = mac
+	fmt.Println("created an entry with id%d, mac%s", ifIdx, string(mac))
 	return &en
 }
 
@@ -142,7 +143,7 @@ func createArray(maxEntries int, keySize int, valueSize int) (*ebpf.Map, error) 
 func pinMap(m *ebpf.Map, path string) error {
 	if err := m.Pin(path); err != nil {
 		m.Close()
-		fmt.Printf("[pinMap] Error! pin map: %s\n", err)
+		//fmt.Printf("[pinMap] Error! pin map: %s\n", err)
 		return err
 	}
 	return nil
@@ -185,7 +186,7 @@ func main() {
 
 	flag.StringVar(&mode, "mode", "init", "Mode can be init or add")
 	flag.IntVar(&idx, "idx", 0, "iface index where tc hook is attached")
-	flag.StringVar(&arg_mac, "mac", "", "MAC address which is allowed to pass through idx")
+	flag.StringVar(&arg_mac, "mac", "invalid", "MAC address which is allowed to pass through idx")
 
 	flag.Parse()
 	fmt.Printf("Mode: %v idx: %v", mode, idx)
@@ -250,16 +251,14 @@ func main() {
 		ifa, err := getInterface(idx)
 		if err != nil {
 			fmt.Printf("Could not get interface %v\n", err.Error())
-			exit(1)
+			os.Exit(1)
 		}
 		entries := []entry{}
 
 		hwa, err := net.ParseMAC(arg_mac)
 		if err != nil {
-			fmt.Printf("Failed to parse the mac address from arg. using ifa provided")
 			hwa = ifa.HardwareAddr
 		}
-
 		e := makeEntry(uint32(ifa.Index), hwa)
 		entries = append(entries, *e)
 		err = addEntryMap(mac_map, entries, 0)

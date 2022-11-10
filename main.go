@@ -192,6 +192,8 @@ func main() {
 	flag.Parse()
 	fmt.Printf("Mode: %v idx: %v", mode, idx)
 
+	mapPathDir := "/sys/fs/bpf/tc/globals/"
+
 	//ifaceMacMapPath := os.args[1]
 	ifaceMacMapPath := "/sys/fs/bpf/tc/globals/iface_map"
 	//egressCountMapPath := os.args[2]
@@ -209,7 +211,13 @@ func main() {
 	var en entry
 	var ct cntPkt
 
-	mac_map, err := createArray(MAXLEN,
+	err := os.MkdirAll(mapPathDir, os.ModePerm)
+	if err != nil {
+		fmt.Printf("Error while creating the directory %s", err)
+		return
+	}
+
+	mac_map, err = createArray(MAXLEN,
 		//len(macArr),
 		int(unsafe.Sizeof(en.ifIdx)),
 		//int(unsafe.Sizeof(en.mac)))

@@ -70,15 +70,28 @@ struct bpf_elf_map ingress_iface_stat_map __section("maps") = {
     .max_elem = MAXELEM,
 };
 
+static __inline bool check_broadcast_mac(__u8 *source) {
+    __u8 pkt_mac[ETH_ALEN];
+    bpf_memcpy(pkt_mac, source, ETH_ALEN);
+    if (pkt_mac[0] == 0xff &&
+        pkt_mac[1] == 0xff &&
+        pkt_mac[2] == 0xff &&
+        pkt_mac[3] == 0xff &&
+        pkt_mac[4] == 0xff &&
+        pkt_mac[5] == 0xff) {
+        return true;
+    }
+    return false;
+}
+
 /* helper functions called from eBPF programs */
 // static int (*bpf_trace_printk)(const char *fmt, int fmt_size, ...) =
 //	        (void *) BPF_FUNC_trace_printk;
 //  enable broadcast messages
 static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
 {
-
-    char pkt_fmt[]   = "MAC_FILTER: pkt skb: %x%x\n";
-    char src_fmt[]   = "MAC_FILTER: source mac: %x%x\n";
+    char pkt_fmt[]   = "MAC_FILTER: pkt skb: %06X%06X\n";
+    char src_fmt[]   = "MAC_FILTER: source mac: %06X%06X\n";
     char broadcast[] = "MAC_FILTER: BROADCAST MESSAGE DETECTED\n";
     char matched[]   = "MAC_FILTER: MAC MATCHED\n";
     char unmatched[] = "MAC_FILTER: MAC DID NOT MATCH\n";
@@ -114,6 +127,17 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
 
         bpf_memcpy(iface_mac, bytes, ETH_ALEN);
 
+        // check broadcast messages
+        // Broadcast address should be allowed
+        if (check_broadcast_mac(eth->h_source) == true ||
+            check_broadcast_mac(eth->h_dest) == true) {
+            if (idx < MAXELEM) {
+                lock_xadd(&(inf->pass), 1);
+            }
+            bpf_trace_printk(broadcast, sizeof(broadcast));
+            return TC_ACT_OK;
+        }
+
         if (mode == EGRESS_MODE) {
             bpf_memcpy(pkt_mac, eth->h_source, ETH_ALEN);
         }
@@ -121,27 +145,13 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
             bpf_memcpy(pkt_mac, eth->h_dest, ETH_ALEN);
         }
 
-        // Broadcast address should be allowed
-        if (pkt_mac[0] == 0xff &&
-            pkt_mac[1] == 0xff &&
-            pkt_mac[2] == 0xff &&
-            pkt_mac[3] == 0xff &&
-            pkt_mac[4] == 0xff &&
-            pkt_mac[5] == 0xff) {
-            //bpf_trace_printk(matched, sizeof(matched));
-            if (idx < MAXELEM) {
-                lock_xadd(&(inf->pass), 1);
-            }
-            bpf_trace_printk(broadcast, sizeof(broadcast));
-            return TC_ACT_OK;
-        }
         // check if the MAC matches and return TC_ACT_OK
-        else if (iface_mac[0] == pkt_mac[0] &&
-                 iface_mac[1] == pkt_mac[1] &&
-                 iface_mac[2] == pkt_mac[2] &&
-                 iface_mac[3] == pkt_mac[3] &&
-                 iface_mac[4] == pkt_mac[4] &&
-                 iface_mac[5] == pkt_mac[5]) {
+        if (iface_mac[0] == pkt_mac[0] &&
+            iface_mac[1] == pkt_mac[1] &&
+            iface_mac[2] == pkt_mac[2] &&
+            iface_mac[3] == pkt_mac[3] &&
+            iface_mac[4] == pkt_mac[4] &&
+            iface_mac[5] == pkt_mac[5]) {
             // bpf_trace_printk(matched, sizeof(matched));
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->pass), 1);
@@ -151,11 +161,11 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
         }
         else {
             bpf_trace_printk(src_fmt, sizeof(src_fmt),
-                             iface_mac[0] << 16 | iface_mac[1] << 8 | iface_mac[2],
-                             iface_mac[3] << 16 | iface_mac[4] << 8 | iface_mac[5]);
-            bpf_trace_printk(src_fmt, sizeof(src_fmt),
-                             pkt_mac[0] << 16 | pkt_mac[1] << 8 | pkt_mac[2],
-                             pkt_mac[3] << 16 | pkt_mac[4] << 8 | pkt_mac[5]);
+                             (iface_mac[0] << 16 | iface_mac[1] << 8 | iface_mac[2]),
+                             (iface_mac[3] << 16 | iface_mac[4] << 8 | iface_mac[5]));
+            bpf_trace_printk(pkt_fmt, sizeof(pkt_fmt),
+                             (pkt_mac[0] << 16 | pkt_mac[1] << 8 | pkt_mac[2]),
+                             (pkt_mac[3] << 16 | pkt_mac[4] << 8 | pkt_mac[5]));
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->drop), 1);
             }

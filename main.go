@@ -47,7 +47,7 @@ func makeEntry(ifIdx uint32, mac net.HardwareAddr) *entry {
 	var en entry
 	en.ifIdx = ifIdx
 	en.mac = mac
-	fmt.Println("created an entry with id%d, mac%s", ifIdx, string(mac))
+	fmt.Printf("created an entry with id %d, mac %s\n", ifIdx, string(mac))
 	return &en
 }
 

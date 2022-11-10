@@ -70,7 +70,7 @@ struct bpf_elf_map ingress_iface_stat_map __section("maps") = {
     .max_elem = MAXELEM,
 };
 
-static __inline bool check_broadcast_mac(__u8 *source) {
+static __inline int check_broadcast_mac(__u8 *source) {
     __u8 pkt_mac[ETH_ALEN];
     bpf_memcpy(pkt_mac, source, ETH_ALEN);
     if (pkt_mac[0] == 0xff &&
@@ -79,9 +79,9 @@ static __inline bool check_broadcast_mac(__u8 *source) {
         pkt_mac[3] == 0xff &&
         pkt_mac[4] == 0xff &&
         pkt_mac[5] == 0xff) {
-        return true;
+        return 1;
     }
-    return false;
+    return 0;
 }
 
 /* helper functions called from eBPF programs */
@@ -129,8 +129,8 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
 
         // check broadcast messages
         // Broadcast address should be allowed
-        if (check_broadcast_mac(eth->h_source) == true ||
-            check_broadcast_mac(eth->h_dest) == true) {
+        if (check_broadcast_mac(eth->h_source) == 1 ||
+            check_broadcast_mac(eth->h_dest) == 1) {
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->pass), 1);
             }

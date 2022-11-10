@@ -90,8 +90,8 @@ static __inline int check_broadcast_mac(__u8 *source) {
 //  enable broadcast messages
 static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
 {
-    char pkt_fmt[]   = "MAC_FILTER: pkt skb: %06X%06X\n";
-    char src_fmt[]   = "MAC_FILTER: source mac: %06X%06X\n";
+    char pkt_fmt[]   = "MAC_FILTER: pkt skb contain mac: %x%x\n";
+    char src_fmt[]   = "MAC_FILTER: expected source mac: %x%x\n";
     char broadcast[] = "MAC_FILTER: BROADCAST MESSAGE DETECTED\n";
     char matched[]   = "MAC_FILTER: MAC MATCHED\n";
     char unmatched[] = "MAC_FILTER: MAC DID NOT MATCH\n";
@@ -160,6 +160,7 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
             return TC_ACT_OK;
         }
         else {
+            bpf_trace_printk(unmatched, sizeof(unmatched));
             bpf_trace_printk(src_fmt, sizeof(src_fmt),
                              (iface_mac[0] << 16 | iface_mac[1] << 8 | iface_mac[2]),
                              (iface_mac[3] << 16 | iface_mac[4] << 8 | iface_mac[5]));
@@ -169,7 +170,6 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->drop), 1);
             }
-            bpf_trace_printk(unmatched, sizeof(unmatched));
             return TC_ACT_SHOT;
         }
     }

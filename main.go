@@ -4,10 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/cilium/ebpf"
 	"net"
 	"os"
 	"unsafe"
+
+	"github.com/cilium/ebpf"
 )
 
 const MAXLEN = 2000
@@ -161,14 +162,14 @@ func pinOrGetMap(path string, m *ebpf.Map) (*ebpf.Map, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		err = pinMap(m, path)
 		if err != nil {
-			fmt.Printf("Error! PinOrGetMap map: %s\n", err)
+			//fmt.Printf("Error! PinOrGetMap map: %s\n", err)
 			return m, err
 		}
 		return m, nil
 	} else {
 		temp, err := getMap(path)
 		if err != nil {
-			fmt.Printf("Error! PinOrGetMap map: %s\n", err)
+			//fmt.Printf("Error! PinOrGetMap map: %s\n", err)
 			return m, err
 		}
 		return temp, nil
@@ -213,6 +214,10 @@ func main() {
 		int(unsafe.Sizeof(en.ifIdx)),
 		//int(unsafe.Sizeof(en.mac)))
 		6)
+	if err != nil {
+		fmt.Printf("Create Map returned error %s\n", err)
+		return
+	}
 	mac_map, err = pinOrGetMap(ifaceMacMapPath, mac_map)
 	if err != nil {
 		fmt.Printf("Error! create map: %s\n", err)

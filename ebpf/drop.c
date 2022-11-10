@@ -77,11 +77,12 @@ struct bpf_elf_map ingress_iface_stat_map __section("maps") = {
 static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
 {
 
-    char pkt_fmt[] = "MAC_FILTER: pkt skb: %x %x %x\n";
-    char src_fmt[] = "MAC_FILTER: source mac: %x %x %x\n";
-    //char matched[] = "MAC_FILTER: MAC MATCHED\n";
+    char pkt_fmt[]   = "MAC_FILTER: pkt skb: %x%x\n";
+    char src_fmt[]   = "MAC_FILTER: source mac: %x%x\n";
+    char broadcast[] = "MAC_FILTER: BROADCAST MESSAGE DETECTED\n";
+    char matched[]   = "MAC_FILTER: MAC MATCHED\n";
     char unmatched[] = "MAC_FILTER: MAC DID NOT MATCH\n";
-    char map_error[] = "Unable to get iface mac from map\n";
+    char map_error[] = "MAC_FILTER: Unable to get iface mac from map\n";
 
     uint32_t *bytes;
     pkt_count *inf;
@@ -131,6 +132,7 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->pass), 1);
             }
+            bpf_trace_printk(broadcast, sizeof(broadcast));
             return TC_ACT_OK;
         }
         // check if the MAC matches and return TC_ACT_OK
@@ -144,22 +146,19 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->pass), 1);
             }
+            bpf_trace_printk(matched, sizeof(matched));
             return TC_ACT_OK;
         }
         else {
-            bpf_trace_printk(src_fmt, sizeof(src_fmt), 
-                iface_mac[0],iface_mac[1],iface_mac[2]);
-            bpf_trace_printk(src_fmt, sizeof(src_fmt), 
-                iface_mac[3],iface_mac[4],iface_mac[5]);
-            bpf_trace_printk(pkt_fmt, sizeof(pkt_fmt), 
-                pkt_mac[0],pkt_mac[1],pkt_mac[2]);
-            bpf_trace_printk(pkt_fmt, sizeof(pkt_fmt), 
-                pkt_mac[3],pkt_mac[4],pkt_mac[5]);
-
+            bpf_trace_printk(src_fmt, sizeof(src_fmt),
+                             iface_mac[0] << 16 | iface_mac[1] << 8 | iface_mac[2],
+                             iface_mac[3] << 16 | iface_mac[4] << 8 | iface_mac[5]);
+            bpf_trace_printk(src_fmt, sizeof(src_fmt),
+                             pkt_mac[0] << 16 | pkt_mac[1] << 8 | pkt_mac[2],
+                             pkt_mac[3] << 16 | pkt_mac[4] << 8 | pkt_mac[5]);
             if (idx < MAXELEM) {
                 lock_xadd(&(inf->drop), 1);
             }
-
             bpf_trace_printk(unmatched, sizeof(unmatched));
             return TC_ACT_SHOT;
         }

@@ -109,7 +109,7 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
     char broadcast[]    = "MAC_FILTER: BROADCAST MESSAGE DETECTED\n";
     char matched[]      = "MAC_FILTER: MAC MATCHED\n";
     char unmatched[]    = "MAC_FILTER: MAC DID NOT MATCH\n";
-    char map_error[]    = "MAC_FILTER: Unable to get iface mac from map\n";
+    char map_error[]    = "MAC_FILTER: Unable to get iface mac/ip from map\n";
     char ip_matched[]   = "IP_FILTER: IP iface:%x == pkt:%x MATCHED\n";
     char ip_unmatched[] = "IP_FILTER: IP iface:%x != pkt:%x DID NOT MATCH\n";
 
@@ -198,11 +198,12 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
                     return TC_ACT_OK;
                 } else {
                     lock_xadd(&(inf->drop), 1);
-                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched, iface_ip, pkt_ip);
+                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched), iface_ip, pkt_ip);
                     return TC_ACT_SHOT;
                 }
             } else {
                 /* Unable to get iface IP. Let the packet through */
+                    bpf_trace_printk(map_error, sizeof(map_error));
                 return TC_ACT_OK;
             }
         }

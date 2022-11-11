@@ -24,6 +24,6 @@ fi
 echo "Attaching bpf-filter to tc hookpoint"
 set -x
     ${TC} qdisc add dev ${iface} clsact
-    ${TC} filter add dev ${iface} egress bpf da obj ${BPF_PROG} sec classifier_ingress_drop
+    #${TC} filter add dev ${iface} egress bpf da obj ${BPF_PROG} sec classifier_ingress_drop
     ${TC} filter add dev ${iface} ingress bpf da obj ${BPF_PROG} sec classifier_egress_drop
 set +x

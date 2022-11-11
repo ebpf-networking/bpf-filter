@@ -110,10 +110,8 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
     char matched[]      = "MAC_FILTER: MAC MATCHED\n";
     char unmatched[]    = "MAC_FILTER: MAC DID NOT MATCH\n";
     char map_error[]    = "MAC_FILTER: Unable to get iface mac from map\n";
-    char pkt_fmt[]      = "MAC_FILTER: pkt skb contain ip: %x\n";
-    char src_fmt[]      = "MAC_FILTER: expected ip: %x\n";
-    char ip_matched[]   = "IP_FILTER: IP MATCHED\n";
-    char ip_unmatched[] = "IP_FILTER: IP DID NOT MATCH\n";
+    char ip_matched[]   = "IP_FILTER: IP iface:%x == pkt:%x MATCHED\n";
+    char ip_unmatched[] = "IP_FILTER: IP iface:%x != pkt:%x DID NOT MATCH\n";
 
     uint32_t *bytes;
     pkt_count *inf;
@@ -125,8 +123,6 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
     struct iphdr *ip;
     struct hdr_cursor nh;
     int nh_type;
-
-    uint32_t idx = skb->ifindex;
 
     if (data_end < (void *)eth + sizeof(struct ethhdr))
         return TC_ACT_SHOT;
@@ -197,12 +193,12 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
                 }
                 bpf_memcpy(&iface_ip, bytes, sizeof(__be32));
                 if(iface_ip == pkt_ip) {
-                    bpf_trace_printk(ip_matched, sizeof(ip_matched));
+                    bpf_trace_printk(ip_matched, sizeof(ip_matched), iface_ip, pkt_ip);
                     lock_xadd(&(inf->pass), 1);
                     return TC_ACT_OK;
                 } else {
                     lock_xadd(&(inf->drop), 1);
-                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched));
+                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched, iface_ip, pkt_ip);
                     return TC_ACT_SHOT;
                 }
             } else {

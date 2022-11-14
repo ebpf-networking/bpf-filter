@@ -224,7 +224,7 @@ func main() {
 	flag.StringVar(&arg_ip, "pod_ip", "invalid", "IP address of pod which is allowed to pass through idx")
 
 	flag.Parse()
-	fmt.Printf("Arguments - mode: %v idx: %v pod_mac: %v pod_ip: %v\n", mode, idx, pod_mac, pod_ip)
+	fmt.Printf("Arguments - mode: %v idx: %v pod_mac: %v pod_ip: %v\n", mode, idx, pod_mac, arg_ip)
 
 	pod_ip, err := Ip2long(arg_ip)
 	if err != nil {
@@ -234,10 +234,11 @@ func main() {
 	}
 
 	mapPathDir := "/sys/fs/bpf/tc/globals/"
-
 	ifaceMacMapPath := "/sys/fs/bpf/tc/globals/iface_map"
+	ifaceIpMapPath := "/sys/fs/bpf/tc/globals/iface_ip_map"
 	countMapPath := "/sys/fs/bpf/tc/globals/iface_stat_map"
 
+	var ip_map *ebpf.Map
 	var mac_map *ebpf.Map
 	var m *ebpf.Map
 	var stats_map *ebpf.Map
@@ -260,6 +261,19 @@ func main() {
 		return
 	}
 	mac_map, err = pinOrGetMap(ifaceMacMapPath, mac_map)
+	if err != nil {
+		fmt.Printf("Error! create map: %s\n", err)
+		return
+	}
+
+	ip_map, err = createArray(MAXLEN,
+		int(unsafe.Sizeof(en.ifIdx)),
+		4)
+	if err != nil {
+		fmt.Printf("Create Map returned error %s\n", err)
+		return
+	}
+	ip_map, err = pinOrGetMap(ifaceIpMapPath, ip_map)
 	if err != nil {
 		fmt.Printf("Error! create map: %s\n", err)
 		return
@@ -304,7 +318,7 @@ func main() {
 			fmt.Printf("Error! populating map: %s\n", err)
 			return
 		}
-		err = addEntryIpMap(mac_map, entries, 0)
+		err = addEntryIpMap(ip_map, entries, 0)
 		if err != nil {
 			fmt.Printf("Error! populating map: %s\n", err)
 			return

@@ -12,7 +12,6 @@
 #include <bpf/bpf_endian.h>
 
 #include "common.h"
-#include "parsing_helpers.h"
 
 #ifndef __section
 #define __section(NAME) \
@@ -141,7 +140,7 @@ static __inline int filter(struct __sk_buff *skb)
     __u8 iface_mac[ETH_ALEN];
     __be32 iface_ip;
 
-    u64 l3_offset = sizeof(struct ethhdr);
+    __u64 l3_offset = sizeof(struct ethhdr);
 
     if (data_end < (void *)eth + l3_offset)
         return TC_ACT_SHOT;
@@ -152,7 +151,7 @@ static __inline int filter(struct __sk_buff *skb)
     }
 
     ip = data + l3_offset;
-    if (ip + 1 > data_end) {
+    if ((void *)(ip + 1) > data_end) {
         return TC_ACT_OK;
     }
 

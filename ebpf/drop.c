@@ -85,7 +85,7 @@ static __inline int compare_mac(__u8 *m1, __u8 *m2) {
 static __inline int is_broadcast_mac(__u8 *m) {
     __u8 broadcast[ETH_ALEN] = {'0xff', '0xff', '0xff',
                                 '0xff', '0xff', '0xff'};
-    return compare_mac(broacast, m);
+    return compare_mac(broadcast, m);
 }
 
 #define ADD_DROP_STAT(idx, inf) do{ \
@@ -180,7 +180,7 @@ static __inline int filter(struct __sk_buff *skb)
 
     // Packet has come from the pod. Check the mac address.
     __u8 *pkt_mac = (__u8 *)eth->h_source;
-    __b32 pkt_ip = ip->saddr;
+    __be32 pkt_ip = ip->saddr;
 
     if (compare_mac(pkt_mac, iface_mac) == 0) {
         bpf_trace_printk(mac_unmatched, sizeof(mac_unmatched));
@@ -195,7 +195,7 @@ static __inline int filter(struct __sk_buff *skb)
     }
 
     // MAC Address matches. Now check IP address
-    bpf_trace_printk(matched, sizeof(matched));
+    bpf_trace_printk(mac_matched, sizeof(mac_matched));
 
     // If IP addresss do not match
     if (iface_ip != pkt_ip) {

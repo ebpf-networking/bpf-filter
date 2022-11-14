@@ -98,11 +98,6 @@ static __inline int is_broadcast_mac(__u8 *m) {
     return 0;
 }
 
-// NOOP
-#define ADD_DROP_STAT(idx, inf) do{}while(0);
-#define ADD_PASS_STAT(idx, inf) do{}while(0);
-
-/*
 #define ADD_DROP_STAT(idx, inf) do{ \
     if (idx < MAXELEM) {            \
         lock_xadd(&(inf->drop), 1); \
@@ -114,7 +109,6 @@ static __inline int is_broadcast_mac(__u8 *m) {
         lock_xadd(&(inf->pass), 1); \
     }                               \
 } while(0);
-*/
 
 /*
     This filter attaches on veth (interface in root namespace) and not
@@ -143,20 +137,24 @@ static __inline int filter(struct __sk_buff *skb)
     struct ethhdr *eth = data;
     uint32_t idx = skb->ifindex;
     struct iphdr *ip;
-    struct hdr_cursor nh;
-    int nh_type;
 
     __u8 iface_mac[ETH_ALEN];
     __be32 iface_ip;
 
-    if (data_end < (void *)eth + sizeof(struct ethhdr))
+    u64 l3_offset = sizeof(struct ethhdr);
+
+    if (data_end < (void *)eth + l3_offset)
         return TC_ACT_SHOT;
 
-    nh.pos = data;
-    nh_type = parse_iphdr(&nh, data_end, &ip);
-    if (nh_type == -1)
-      return TC_ACT_SHOT;
+    /* ETH_P_IP in Little Endian Format */
+    if (eth->h_proto != 0x0008) {
+        return TC_ACT_OK;
+    }
 
+    ip = data + l3_offset;
+    if (ip + 1 > data_end) {
+        return TC_ACT_OK;
+    }
 
     inf = bpf_map_lookup_elem(&iface_stat_map, &(idx));
     if (!inf) {

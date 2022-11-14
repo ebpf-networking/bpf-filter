@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ const MAXLEN = 2000
 type entry struct {
 	ifIdx uint32
 	mac   net.HardwareAddr
+	ip    uint32
 }
 
 // cntPkt resembles cntPkt in ebpf kernel code
@@ -28,6 +30,22 @@ type cntPkt struct {
 type statEntry struct {
 	ifIdx uint32
 	count cntPkt
+}
+
+func Ip2long(ipAddr string) (uint32, error) {
+	ip := net.ParseIP(ipAddr)
+	if ip == nil {
+		return 0, errors.New("wrong ipAddr format")
+	}
+	ip = ip.To4()
+	return binary.BigEndian.Uint32(ip), nil
+}
+
+func Long2ip(ipLong uint32) string {
+	ipByte := make([]byte, 4)
+	binary.BigEndian.PutUint32(ipByte, ipLong)
+	ip := net.IP(ipByte)
+	return ip.String()
 }
 
 func initializeStatsMap(m *ebpf.Map, entries []uint32) error {
@@ -43,11 +61,12 @@ func initializeStatsMap(m *ebpf.Map, entries []uint32) error {
 	return nil
 }
 
-func makeEntry(ifIdx uint32, mac net.HardwareAddr) *entry {
+func makeEntry(ifIdx uint32, mac net.HardwareAddr, ip uint32) *entry {
 	var en entry
 	en.ifIdx = ifIdx
 	en.mac = mac
-	fmt.Printf("created an entry with id %d, mac %s\n", ifIdx, mac)
+	en.ip = ip
+	fmt.Printf("created an entry with id %v, mac %s, ip %v\n", ifIdx, mac, ip)
 	return &en
 }
 
@@ -62,7 +81,7 @@ func getAllMACs() ([]entry, error) {
 		if a != "" {
 			fmt.Printf("ifIndex: %v macAddr: %v size_mac: %d\n",
 				ifa.Index, ifa.HardwareAddr, int(unsafe.Sizeof(ifa.HardwareAddr)))
-			e := makeEntry(uint32(ifa.Index), ifa.HardwareAddr)
+			e := makeEntry(uint32(ifa.Index), ifa.HardwareAddr, 0)
 			entries = append(entries, *e)
 		}
 	}
@@ -98,9 +117,21 @@ func getAllIfaceIndices() ([]uint32, error) {
 }
 
 // This will overwrite previous entry if any
-func addEntryMap(m *ebpf.Map, entries []entry, rand int) error {
+func addEntryMacMap(m *ebpf.Map, entries []entry, rand int) error {
 	for _, ifa := range entries {
 		err := m.Put(ifa.ifIdx+uint32(rand), []byte(ifa.mac))
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// This will overwrite previous entry if any
+func addEntryIpMap(m *ebpf.Map, entries []entry, rand int) error {
+	for _, ifa := range entries {
+		err := m.Put(ifa.ifIdx+uint32(rand), ifa.ip)
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return err
@@ -183,35 +214,37 @@ func main() {
 
 	var mode string
 	var idx int
-	var arg_mac string
+	var pod_mac string
+	var pod_ip uint32
+	var arg_ip string
 
 	flag.StringVar(&mode, "mode", "init", "Mode can be init or add")
 	flag.IntVar(&idx, "idx", 0, "iface index where tc hook is attached")
-	flag.StringVar(&arg_mac, "mac", "invalid", "MAC address which is allowed to pass through idx")
+	flag.StringVar(&pod_mac, "pod_mac", "invalid", "MAC address which is allowed to pass through idx")
+	flag.StringVar(&arg_ip, "pod_ip", "invalid", "IP address of pod which is allowed to pass through idx")
 
 	flag.Parse()
-	fmt.Printf("Mode: %v idx: %v", mode, idx)
+	fmt.Printf("Arguments - mode: %v idx: %v pod_mac: %v pod_ip: %v\n", mode, idx, pod_mac, pod_ip)
+
+	pod_ip, err := Ip2long(arg_ip)
+	if err != nil {
+		fmt.Printf("Error while converting %s to ip address", arg_ip)
+		fmt.Println(err)
+		return
+	}
 
 	mapPathDir := "/sys/fs/bpf/tc/globals/"
 
-	//ifaceMacMapPath := os.args[1]
 	ifaceMacMapPath := "/sys/fs/bpf/tc/globals/iface_map"
-	//egressCountMapPath := os.args[2]
-	egressCountMapPath := "/sys/fs/bpf/tc/globals/egress_iface_stat_map"
-	//ingressCountMapPath := os.args[3]
-	ingressCountMapPath := "/sys/fs/bpf/tc/globals/ingress_iface_stat_map"
-
-	//path := "/sys/fs/bpf/tc/globals/iface_map"
+	countMapPath := "/sys/fs/bpf/tc/globals/iface_stat_map"
 
 	var mac_map *ebpf.Map
 	var m *ebpf.Map
-	var ingress_stats_map *ebpf.Map
-	var egress_stats_map *ebpf.Map
+	var stats_map *ebpf.Map
 
 	var en entry
 	var ct cntPkt
-
-	err := os.MkdirAll(mapPathDir, os.ModePerm)
+	err = os.MkdirAll(mapPathDir, os.ModePerm)
 	if err != nil {
 		fmt.Printf("Error while creating the directory %s", err)
 		return
@@ -232,15 +265,8 @@ func main() {
 		return
 	}
 
-	egress_stats_map, err = createArray(MAXLEN, int(unsafe.Sizeof(en.ifIdx)), int(unsafe.Sizeof(ct)))
-	egress_stats_map, err = pinOrGetMap(egressCountMapPath, egress_stats_map)
-	if err != nil {
-		fmt.Printf("Error! create map: %s\n", err)
-		return
-	}
-
-	ingress_stats_map, err = createArray(MAXLEN, int(unsafe.Sizeof(en.ifIdx)), int(unsafe.Sizeof(ct)))
-	ingress_stats_map, err = pinOrGetMap(ingressCountMapPath, ingress_stats_map)
+	stats_map, err = createArray(MAXLEN, int(unsafe.Sizeof(en.ifIdx)), int(unsafe.Sizeof(ct)))
+	stats_map, err = pinOrGetMap(countMapPath, stats_map)
 	if err != nil {
 		fmt.Printf("Error! create map: %s\n", err)
 		return
@@ -252,14 +278,13 @@ func main() {
 		if err != nil || len(macArr) == 0 {
 			return
 		}
-		err = addEntryMap(mac_map, macArr, 0)
+		err = addEntryMacMap(mac_map, macArr, 0)
 		if err != nil {
 			fmt.Printf("Error! populating map: %s\n", err)
 			return
 		}
 		ifaceIndices, err := getAllIfaceIndices()
-		initializeStatsMap(egress_stats_map, ifaceIndices)
-		initializeStatsMap(ingress_stats_map, ifaceIndices)
+		initializeStatsMap(stats_map, ifaceIndices)
 	case "add":
 		ifa, err := getInterface(idx)
 		if err != nil {
@@ -268,25 +293,26 @@ func main() {
 		}
 		entries := []entry{}
 
-		hwa, err := net.ParseMAC(arg_mac)
+		hwa, err := net.ParseMAC(pod_mac)
 		if err != nil {
 			hwa = ifa.HardwareAddr
 		}
-		e := makeEntry(uint32(ifa.Index), hwa)
+		e := makeEntry(uint32(ifa.Index), hwa, pod_ip)
 		entries = append(entries, *e)
-		err = addEntryMap(mac_map, entries, 0)
+		err = addEntryMacMap(mac_map, entries, 0)
 		if err != nil {
 			fmt.Printf("Error! populating map: %s\n", err)
 			return
 		}
-		//Initialize stats maps for idx
-		cntPkt := cntPkt{drop: 0, pass: 0}
-		err = ingress_stats_map.Put(uint32(ifa.Index), (cntPkt))
+		err = addEntryIpMap(mac_map, entries, 0)
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			fmt.Printf("Error! populating map: %s\n", err)
 			return
 		}
-		err = egress_stats_map.Put(uint32(ifa.Index), (cntPkt))
+
+		//Initialize stats maps for idx
+		cntPkt := cntPkt{drop: 0, pass: 0}
+		err = stats_map.Put(uint32(ifa.Index), (cntPkt))
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return

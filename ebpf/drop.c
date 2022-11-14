@@ -36,8 +36,6 @@
 
 #define bpf_memcpy __builtin_memcpy
 
-#define EGRESS_MODE 0
-#define INGRESS_MODE 1
 #define MAXELEM 2000
 
 typedef struct cnt_pkt {
@@ -68,7 +66,7 @@ struct bpf_elf_map iface_ip_map __section("maps") = {
 	.max_elem       = MAXELEM,
 };
 
-struct bpf_elf_map egress_iface_stat_map __section("maps") = {
+struct bpf_elf_map iface_stat_map __section("maps") = {
     .type = BPF_MAP_TYPE_HASH,
     .size_key = sizeof(uint32_t),
     .size_value = sizeof(pkt_count),
@@ -76,42 +74,47 @@ struct bpf_elf_map egress_iface_stat_map __section("maps") = {
     .max_elem = MAXELEM,
 };
 
-struct bpf_elf_map ingress_iface_stat_map __section("maps") = {
-    .type = BPF_MAP_TYPE_HASH,
-    .size_key = sizeof(uint32_t),
-    .size_value = sizeof(pkt_count),
-    .pinning = PIN_GLOBAL_NS,
-    .max_elem = MAXELEM,
-};
-
-static __inline int check_broadcast_mac(__u8 *source) {
-    __u8 pkt_mac[ETH_ALEN];
-    bpf_memcpy(pkt_mac, source, ETH_ALEN);
-    if (pkt_mac[0] == 0xff &&
-        pkt_mac[1] == 0xff &&
-        pkt_mac[2] == 0xff &&
-        pkt_mac[3] == 0xff &&
-        pkt_mac[4] == 0xff &&
-        pkt_mac[5] == 0xff) {
+static __inline int compare_mac(__u8 *m1, __u8 *m2) {
+    if (m1[0] == m2[0] && m1[1] == m2[1] && m1[2] == m2[2] &&
+        m1[3] == m2[3] && m1[4] == m2[4] && m1[5] == m2[5]) {
         return 1;
     }
     return 0;
 }
 
-/* helper functions called from eBPF programs */
-// static int (*bpf_trace_printk)(const char *fmt, int fmt_size, ...) =
-//	        (void *) BPF_FUNC_trace_printk;
-//  enable broadcast messages
-static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
+static __inline int is_broadcast_mac(__u8 *m) {
+    __u8 broadcast[ETH_ALEN] = {'0xff', '0xff', '0xff',
+                                '0xff', '0xff', '0xff'};
+    return compare_mac(broacast, m);
+}
+
+#define ADD_DROP_STAT(idx, inf) do{ \
+    if (idx < MAXELEM) {            \
+        lock_xadd(&(inf->drop), 1); \
+    }                               \
+} while(0);
+
+#define ADD_PASS_STAT(idx, inf) do{ \
+    if (idx < MAXELEM) {            \
+        lock_xadd(&(inf->pass), 1); \
+    }                               \
+} while(0);
+
+/*
+    This filter attaches on veth (interface in root namespace) and not
+    vpeer (interface in the pod namespace) so INGRESS means data coming from pod
+    EGRESS means data going towards the pod.
+*/
+static __inline int filter(struct __sk_buff *skb)
 {
-    char pkt_fmt[]      = "MAC_FILTER: pkt skb contain mac: %x%x\n";
-    char src_fmt[]      = "MAC_FILTER: expected source mac: %x%x\n";
-    char broadcast[]    = "MAC_FILTER: BROADCAST MESSAGE DETECTED\n";
-    char matched[]      = "MAC_FILTER: MAC MATCHED\n";
-    char unmatched[]    = "MAC_FILTER: MAC DID NOT MATCH\n";
-    char map_error[]    = "MAC_FILTER: Unable to get iface mac/ip from map\n";
-    char ip_matched[]   = "IP_FILTER: IP iface:%x == pkt:%x MATCHED\n";
-    char ip_unmatched[] = "IP_FILTER: IP iface:%x != pkt:%x DID NOT MATCH\n";
+    char pkt_fmt[]       = "MAC_FILTER: pkt skb contain mac: %x%x\n";
+    char src_fmt[]       = "MAC_FILTER: expected source mac: %x%x\n";
+    char broadcast[]     = "MAC_FILTER: BROADCAST MESSAGE DETECTED\n";
+    char mac_matched[]   = "MAC_FILTER: MAC MATCHED\n";
+    char mac_unmatched[] = "MAC_FILTER: MAC DID NOT MATCH\n";
+    char map_error[]     = "MAC_FILTER: Unable to get iface %s from map\n";
+    char ip_matched[]    = "IP_FILTER: IP iface:%pI4 == pkt:%pI4 MATCHED\n";
+    char ip_unmatched[]  = "IP_FILTER: IP iface:%pI4 != pkt:%pI4 DID NOT MATCH\n";
 
     uint32_t *bytes;
     pkt_count *inf;
@@ -124,6 +127,9 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
     struct hdr_cursor nh;
     int nh_type;
 
+    __u8 iface_mac[ETH_ALEN];
+    __be32 iface_ip;
+
     if (data_end < (void *)eth + sizeof(struct ethhdr))
         return TC_ACT_SHOT;
 
@@ -132,114 +138,79 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
     if (nh_type == -1)
       return TC_ACT_SHOT;
 
-    if (mode == EGRESS_MODE) {
-        inf = bpf_map_lookup_elem(&egress_iface_stat_map, &(idx));
-    } else {
-        inf = bpf_map_lookup_elem(&ingress_iface_stat_map, &(idx));
-    }
 
+    inf = bpf_map_lookup_elem(&iface_stat_map, &(idx));
     if (!inf) {
         // haven't found the stat-entry, unexpected behavior, let packet go through.
         return TC_ACT_OK;
     }
 
+    // Mac address lookup
     bytes = bpf_map_lookup_elem(&iface_map, &(idx));
-    if (bytes) {
-        __u8 iface_mac[ETH_ALEN];
-        __u8 pkt_mac[ETH_ALEN];
-
-        bpf_memcpy(iface_mac, bytes, ETH_ALEN);
-
-        // check broadcast messages
-        // Broadcast address should be allowed
-        if (check_broadcast_mac(eth->h_source) == 1 ||
-            check_broadcast_mac(eth->h_dest) == 1) {
-            if (idx < MAXELEM) {
-                lock_xadd(&(inf->pass), 1);
-            }
-            bpf_trace_printk(broadcast, sizeof(broadcast));
-            return TC_ACT_OK;
-        }
-
-        if (mode == EGRESS_MODE) {
-            bpf_memcpy(pkt_mac, eth->h_source, ETH_ALEN);
-        }
-        else {
-            bpf_memcpy(pkt_mac, eth->h_dest, ETH_ALEN);
-        }
-
-        // check if the MAC matches and return TC_ACT_OK
-        if (iface_mac[0] == pkt_mac[0] &&
-            iface_mac[1] == pkt_mac[1] &&
-            iface_mac[2] == pkt_mac[2] &&
-            iface_mac[3] == pkt_mac[3] &&
-            iface_mac[4] == pkt_mac[4] &&
-            iface_mac[5] == pkt_mac[5]) {
-            // bpf_trace_printk(matched, sizeof(matched));
-            if (idx < MAXELEM) {
-                lock_xadd(&(inf->pass), 1);
-            }
-            bpf_trace_printk(matched, sizeof(matched));
-
-            // IP addresss match
-            bytes = bpf_map_lookup_elem(&iface_ip_map, &(idx));
-            if (bytes) {
-                __be32 pkt_ip;
-                __be32 iface_ip;
-                if (mode == EGRESS_MODE) {
-                    pkt_ip=ip->saddr;
-                } else {
-                    pkt_ip = ip->daddr;
-                }
-                bpf_memcpy(&iface_ip, bytes, sizeof(__be32));
-                if(iface_ip == pkt_ip) {
-                    bpf_trace_printk(ip_matched, sizeof(ip_matched), iface_ip, pkt_ip);
-                    lock_xadd(&(inf->pass), 1);
-                    return TC_ACT_OK;
-                } else {
-                    lock_xadd(&(inf->drop), 1);
-                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched), iface_ip, pkt_ip);
-                    return TC_ACT_SHOT;
-                }
-            } else {
-                /* Unable to get iface IP. Let the packet through */
-                    bpf_trace_printk(map_error, sizeof(map_error));
-                return TC_ACT_OK;
-            }
-        }
-        else {
-            bpf_trace_printk(unmatched, sizeof(unmatched));
-            bpf_trace_printk(src_fmt, sizeof(src_fmt),
-                             (iface_mac[0] << 16 | iface_mac[1] << 8 | iface_mac[2]),
-                             (iface_mac[3] << 16 | iface_mac[4] << 8 | iface_mac[5]));
-            bpf_trace_printk(pkt_fmt, sizeof(pkt_fmt),
-                             (pkt_mac[0] << 16 | pkt_mac[1] << 8 | pkt_mac[2]),
-                             (pkt_mac[3] << 16 | pkt_mac[4] << 8 | pkt_mac[5]));
-            if (idx < MAXELEM) {
-                lock_xadd(&(inf->drop), 1);
-            }
-            return TC_ACT_SHOT;
-        }
-    }
-    else {
+    if (bytes == NULL) {
         /* Unable to get iface MAC. Let the packet through */
-        bpf_trace_printk(map_error, sizeof(map_error));
+        bpf_trace_printk(map_error, sizeof(map_error), "mac");
+        return TC_ACT_OK;
+    }
+    bpf_memcpy(iface_mac, bytes, ETH_ALEN);
+
+    // IP addresss lookup
+    bytes = bpf_map_lookup_elem(&iface_ip_map, &(idx));
+    if (bytes == NULL) {
+        /* Unable to get iface IP. Let the packet through */
+        bpf_trace_printk(map_error, sizeof(map_error), "ip");
+        return TC_ACT_OK;
+    }
+    bpf_memcpy(&iface_ip, bytes, sizeof(__be32));
+
+    // check broadcast messages
+    // Broadcast address should be allowed
+    if (is_broadcast_mac(eth->h_source) == 1 ||
+        is_broadcast_mac(eth->h_dest) == 1) {
+        ADD_PASS_STAT(idx, inf);
+        bpf_trace_printk(broadcast, sizeof(broadcast));
         return TC_ACT_OK;
     }
 
-    if (idx < MAXELEM) {
-        lock_xadd(&(inf->pass), 1);
+    /* check is packet is coming from pod or going towards pod. */
+    if (compare_mac(eth->h_dest, iface_mac) == 1) {
+        // Packet is going towards the pod. Let is pass
+        return TC_ACT_OK;
     }
 
+    // Packet has come from the pod. Check the mac address.
+    __u8 *pkt_mac = (__u8 *)eth->h_source;
+    __b32 pkt_ip = ip->saddr;
+
+    if (compare_mac(pkt_mac, iface_mac) == 0) {
+        bpf_trace_printk(mac_unmatched, sizeof(mac_unmatched));
+        bpf_trace_printk(src_fmt, sizeof(src_fmt),
+                         (iface_mac[0] << 16 | iface_mac[1] << 8 | iface_mac[2]),
+                         (iface_mac[3] << 16 | iface_mac[4] << 8 | iface_mac[5]));
+        bpf_trace_printk(pkt_fmt, sizeof(pkt_fmt),
+                         (pkt_mac[0] << 16 | pkt_mac[1] << 8 | pkt_mac[2]),
+                         (pkt_mac[3] << 16 | pkt_mac[4] << 8 | pkt_mac[5]));
+        ADD_DROP_STAT(idx, inf);
+        return TC_ACT_SHOT;
+    }
+
+    // MAC Address matches. Now check IP address
+    bpf_trace_printk(matched, sizeof(matched));
+
+    // If IP addresss do not match
+    if (iface_ip != pkt_ip) {
+        bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched), iface_ip, pkt_ip);
+        ADD_DROP_STAT(idx, inf);
+        return TC_ACT_SHOT;
+    }
+
+    // IP address matches
+    bpf_trace_printk(ip_matched, sizeof(ip_matched), iface_ip, pkt_ip);
+    ADD_PASS_STAT(idx, inf);
     return TC_ACT_OK;
 }
 
-__section("classifier_egress_drop") int egress_drop(struct __sk_buff *skb)
+__section("classifier_bpf_filter") int bpf_filter(struct __sk_buff *skb)
 {
-    return match_mac(skb, EGRESS_MODE);
-}
-
-__section("classifier_ingress_drop") int ingress_drop(struct __sk_buff *skb)
-{
-    return match_mac(skb, INGRESS_MODE);
+    return filter(skb);
 }

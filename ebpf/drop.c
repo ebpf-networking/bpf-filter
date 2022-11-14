@@ -74,20 +74,35 @@ struct bpf_elf_map iface_stat_map __section("maps") = {
     .max_elem = MAXELEM,
 };
 
-static __inline int compare_mac(__u8 *m1, __u8 *m2) {
-    if (m1[0] == m2[0] && m1[1] == m2[1] && m1[2] == m2[2] &&
-        m1[3] == m2[3] && m1[4] == m2[4] && m1[5] == m2[5]) {
+static __inline int compare_mac(__u8 *mac1, __u8 *mac2) {
+    if (mac1[0] == mac2[0] &&
+        mac1[1] == mac2[1] &&
+        mac1[2] == mac2[2] &&
+        mac1[3] == mac2[3] &&
+        mac1[4] == mac2[4] &&
+        mac1[5] == mac2[5]) {
         return 1;
     }
     return 0;
 }
 
 static __inline int is_broadcast_mac(__u8 *m) {
-    __u8 broadcast[ETH_ALEN] = {'0xff', '0xff', '0xff',
-                                '0xff', '0xff', '0xff'};
-    return compare_mac(broadcast, m);
+    if (m[0] == (__u8)'0xff' &&
+        m[1] == (__u8)'0xff' &&
+        m[2] == (__u8)'0xff' &&
+        m[3] == (__u8)'0xff' &&
+        m[4] == (__u8)'0xff' &&
+        m[5] == (__u8)'0xff') {
+        return 1;
+    }
+    return 0;
 }
 
+// NOOP
+#define ADD_DROP_STAT(idx, inf) do{}while(0);
+#define ADD_PASS_STAT(idx, inf) do{}while(0);
+
+/*
 #define ADD_DROP_STAT(idx, inf) do{ \
     if (idx < MAXELEM) {            \
         lock_xadd(&(inf->drop), 1); \
@@ -99,6 +114,7 @@ static __inline int is_broadcast_mac(__u8 *m) {
         lock_xadd(&(inf->pass), 1); \
     }                               \
 } while(0);
+*/
 
 /*
     This filter attaches on veth (interface in root namespace) and not
@@ -113,8 +129,11 @@ static __inline int filter(struct __sk_buff *skb)
     char mac_matched[]   = "MAC_FILTER: MAC MATCHED\n";
     char mac_unmatched[] = "MAC_FILTER: MAC DID NOT MATCH\n";
     char map_error[]     = "MAC_FILTER: Unable to get iface %s from map\n";
-    char ip_matched[]    = "IP_FILTER: IP iface:%pI4 == pkt:%pI4 MATCHED\n";
-    char ip_unmatched[]  = "IP_FILTER: IP iface:%pI4 != pkt:%pI4 DID NOT MATCH\n";
+    char ip_matched[]    = "IP_FILTER: IP iface:%x == pkt:%x MATCHED\n";
+    char ip_unmatched[]  = "IP_FILTER: IP iface:%x != pkt:%x DID NOT MATCH\n";
+    char ipstr[]         = "ip";
+    char macstr[]        = "mac";
+    char statsstr[]      = "stats";
 
     uint32_t *bytes;
     pkt_count *inf;
@@ -142,6 +161,7 @@ static __inline int filter(struct __sk_buff *skb)
     inf = bpf_map_lookup_elem(&iface_stat_map, &(idx));
     if (!inf) {
         // haven't found the stat-entry, unexpected behavior, let packet go through.
+        bpf_trace_printk(map_error, sizeof(map_error), statsstr);
         return TC_ACT_OK;
     }
 
@@ -149,7 +169,7 @@ static __inline int filter(struct __sk_buff *skb)
     bytes = bpf_map_lookup_elem(&iface_map, &(idx));
     if (bytes == NULL) {
         /* Unable to get iface MAC. Let the packet through */
-        bpf_trace_printk(map_error, sizeof(map_error), "mac");
+        bpf_trace_printk(map_error, sizeof(map_error), macstr);
         return TC_ACT_OK;
     }
     bpf_memcpy(iface_mac, bytes, ETH_ALEN);
@@ -158,16 +178,15 @@ static __inline int filter(struct __sk_buff *skb)
     bytes = bpf_map_lookup_elem(&iface_ip_map, &(idx));
     if (bytes == NULL) {
         /* Unable to get iface IP. Let the packet through */
-        bpf_trace_printk(map_error, sizeof(map_error), "ip");
+        bpf_trace_printk(map_error, sizeof(map_error), ipstr);
         return TC_ACT_OK;
     }
     bpf_memcpy(&iface_ip, bytes, sizeof(__be32));
 
     // check broadcast messages
     // Broadcast address should be allowed
-    if (is_broadcast_mac(eth->h_source) == 1 ||
-        is_broadcast_mac(eth->h_dest) == 1) {
-        ADD_PASS_STAT(idx, inf);
+    if ((is_broadcast_mac(eth->h_source) == 1) ||
+        (is_broadcast_mac(eth->h_dest) == 1)) {
         bpf_trace_printk(broadcast, sizeof(broadcast));
         return TC_ACT_OK;
     }

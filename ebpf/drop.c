@@ -41,15 +41,10 @@
 typedef struct cnt_pkt {
     uint32_t drop;
     uint32_t pass;
-} pkt_count;
-
-typedef struct iface_desc {
-  __u8 mac[ETH_ALEN];
-  __u32 ip;
-} iface_desc;
+} pkt_count_t;
 
 #define IP_LEN 4
-
+/*
 struct bpf_elf_map iface_map __section("maps") = {
     .type = BPF_MAP_TYPE_HASH,
     .size_key = sizeof(uint32_t),
@@ -69,10 +64,41 @@ struct bpf_elf_map iface_ip_map __section("maps") = {
 struct bpf_elf_map iface_stat_map __section("maps") = {
     .type = BPF_MAP_TYPE_HASH,
     .size_key = sizeof(uint32_t),
-    .size_value = sizeof(pkt_count),
+    .size_value = sizeof(pkt_count_t),
     .pinning = PIN_GLOBAL_NS,
     .max_elem = MAXELEM,
 };
+*/
+
+/* A struct which is equal to size of MAC address ETH_ALEN */
+typedef struct {
+    uint32_t hi;
+    uint16_t lo;
+} mac_address_t;
+
+typedef union {
+    mac_address_t hi_lo_mac;
+    char mac_address_array[ETH_ALEN];
+} bpf_filter_mac_address_t;
+
+typedef struct {
+    bpf_filter_mac_address_t mac;
+    uint32_t ip;
+} bpf_filter_map_value_t;
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, uint32_t);
+    __type(value, bpf_filter_map_value_t);
+    __uint(max_entries, MAXELEM);
+} iface_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAXELEM);
+    __type(key, uint32_t);
+    __type(value, pkt_count_t);
+} iface_stat_map SEC(".maps");
 
 static __inline int compare_mac(__u8 *m1, __u8 *m2) {
     if (m1[0] == m2[0] && m1[1] == m2[1] && m1[2] == m2[2] &&
@@ -116,8 +142,10 @@ static __inline int filter(struct __sk_buff *skb)
     char ip_matched[]    = "IP_FILTER: IP iface:%pI4 == pkt:%pI4 MATCHED\n";
     char ip_unmatched[]  = "IP_FILTER: IP iface:%pI4 != pkt:%pI4 DID NOT MATCH\n";
 
+    struct bpf_filter_map_value_t *bpf_map_entry;
+
     uint32_t *bytes;
-    pkt_count *inf;
+    pkt_count_t *inf;
 
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
@@ -145,23 +173,17 @@ static __inline int filter(struct __sk_buff *skb)
         return TC_ACT_OK;
     }
 
-    // Mac address lookup
-    bytes = bpf_map_lookup_elem(&iface_map, &(idx));
-    if (bytes == NULL) {
+    bpf_map_entry = (struct bpf_filter_map_value_t *)bpf_map_lookup_elem(&iface_map, &(idx));
+    if (bpf_map_entry == NULL) {
         /* Unable to get iface MAC. Let the packet through */
-        bpf_trace_printk(map_error, sizeof(map_error), "mac");
+        bpf_trace_printk(map_error, sizeof(map_error), "info");
         return TC_ACT_OK;
     }
-    bpf_memcpy(iface_mac, bytes, ETH_ALEN);
 
-    // IP addresss lookup
-    bytes = bpf_map_lookup_elem(&iface_ip_map, &(idx));
-    if (bytes == NULL) {
-        /* Unable to get iface IP. Let the packet through */
-        bpf_trace_printk(map_error, sizeof(map_error), "ip");
-        return TC_ACT_OK;
-    }
-    bpf_memcpy(&iface_ip, bytes, sizeof(__be32));
+    // Mac address extract
+    bpf_memcpy(iface_mac, bpf_map_entry->mac.mac_address_array, ETH_ALEN);
+    // IP addresss extract
+    bpf_memcpy(&iface_ip, &bpf_map_entry->ip, sizeof(__be32));
 
     // check broadcast messages
     // Broadcast address should be allowed

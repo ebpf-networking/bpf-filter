@@ -198,7 +198,7 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
                     return TC_ACT_OK;
                 } else {
                     lock_xadd(&(inf->drop), 1);
-                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched, iface_ip, pkt_ip);
+                    bpf_trace_printk(ip_unmatched, sizeof(ip_unmatched, iface_ip, pkt_ip));
                     return TC_ACT_SHOT;
                 }
             } else {

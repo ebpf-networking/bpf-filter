@@ -187,7 +187,7 @@ static __inline int match_mac(struct __sk_buff *skb, uint32_t mode)
                 __be32 pkt_ip;
                 __be32 iface_ip;
                 if (mode == EGRESS_MODE) {
-                    pkt_ip=ip->saddr;
+                    pkt_ip = ip->saddr;
                 } else {
                     pkt_ip = ip->daddr;
                 }

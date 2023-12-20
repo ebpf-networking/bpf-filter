@@ -11,7 +11,7 @@ TC='/sbin/tc'
 BPF_USER="./bin/main"
 
 #run user prog for programming maps
-CMD=${BPF_USER}" --mode add --idx "${iface_id}" --mac "${iface_mac}
+CMD=${BPF_USER}" --mode add --idx "${iface_id}" --mac "${iface_mac}" --ip "${iface_ip}
 
 echo "${CMD}"
 ${CMD}
